@@ -20,7 +20,9 @@ export default function App() {
     messages: Message[];
     initial_search_query_count: number;
     max_research_loops: number;
-    reasoning_model: string;
+    query_generator_model: string;
+    reflection_model: string;
+    answer_model: string;
   }>({
     apiUrl: import.meta.env.DEV
       ? "http://localhost:2024"
@@ -138,7 +140,9 @@ export default function App() {
         messages: newMessages,
         initial_search_query_count: initial_search_query_count,
         max_research_loops: max_research_loops,
-        reasoning_model: model,
+        query_generator_model: model,
+        reflection_model: model,
+        answer_model: model,
       });
     },
     [thread]

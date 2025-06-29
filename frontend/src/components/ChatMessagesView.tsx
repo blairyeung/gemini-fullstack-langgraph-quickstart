@@ -1,7 +1,7 @@
 import type React from "react";
 import type { Message } from "@langchain/langgraph-sdk";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Loader2, Copy, CopyCheck } from "lucide-react";
+import { Loader2, Copy, CopyCheck, ChevronDown, ChevronRight } from "lucide-react";
 import { InputForm } from "@/components/InputForm";
 import { Button } from "@/components/ui/button";
 import { useState, ReactNode } from "react";
@@ -12,6 +12,80 @@ import {
   ActivityTimeline,
   ProcessedEvent,
 } from "@/components/ActivityTimeline"; // Assuming ActivityTimeline is in the same dir or adjust path
+
+// Utility function to parse thinking content from message
+interface ParsedMessage {
+  thinkingSections: string[];
+  regularContent: string;
+}
+
+function parseThinkingContent(content: string): ParsedMessage {
+  const thinkingRegex = /<think>([\s\S]*?)<\/think>/g;
+  const thinkingSections: string[] = [];
+  let match;
+  
+  while ((match = thinkingRegex.exec(content)) !== null) {
+    thinkingSections.push(match[1].trim());
+  }
+  
+  const regularContent = content.replace(thinkingRegex, '').trim();
+  
+  return {
+    thinkingSections,
+    regularContent
+  };
+}
+
+// Collapsible Thinking Component
+interface CollapsibleThinkingProps {
+  thinkingSections: string[];
+  mdComponents: typeof mdComponents;
+}
+
+const CollapsibleThinking: React.FC<CollapsibleThinkingProps> = ({
+  thinkingSections,
+  mdComponents,
+}) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  
+  if (thinkingSections.length === 0) return null;
+  
+  return (
+    <div className="mb-4 border border-neutral-600 rounded-lg overflow-hidden">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center justify-between p-3 bg-neutral-700 hover:bg-neutral-600 transition-colors text-left"
+      >
+        <span className="text-sm font-medium text-neutral-300">
+          💭 Thinking Process ({thinkingSections.length} section{thinkingSections.length > 1 ? 's' : ''})
+        </span>
+        {isExpanded ? (
+          <ChevronDown className="h-4 w-4 text-neutral-400" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-neutral-400" />
+        )}
+      </button>
+      {isExpanded && (
+        <div className="p-3 bg-neutral-800 border-t border-neutral-600">
+          {thinkingSections.map((section, index) => (
+            <div key={index} className="mb-3 last:mb-0">
+              {thinkingSections.length > 1 && (
+                <div className="text-xs text-neutral-400 mb-2 font-mono">
+                  Section {index + 1}
+                </div>
+              )}
+              <div className="text-sm text-neutral-200 bg-neutral-900 p-3 rounded border-l-4 border-blue-500">
+                <ReactMarkdown components={mdComponents}>
+                  {section}
+                </ReactMarkdown>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 // Markdown component props type from former ReportView
 type MdComponentProps = {
@@ -186,6 +260,13 @@ const AiMessageBubble: React.FC<AiMessageBubbleProps> = ({
     isLastMessage && isOverallLoading ? liveActivity : historicalActivity;
   const isLiveActivityForThisBubble = isLastMessage && isOverallLoading;
 
+  // Parse the message content to separate thinking sections from regular content
+  const messageContentString = typeof message.content === "string"
+    ? message.content
+    : JSON.stringify(message.content);
+  
+  const { thinkingSections, regularContent } = parseThinkingContent(messageContentString);
+
   return (
     <div className={`relative break-words flex flex-col`}>
       {activityForThisBubble && activityForThisBubble.length > 0 && (
@@ -196,11 +277,18 @@ const AiMessageBubble: React.FC<AiMessageBubbleProps> = ({
           />
         </div>
       )}
+      
+      {/* Render thinking sections in collapsible component */}
+      <CollapsibleThinking 
+        thinkingSections={thinkingSections}
+        mdComponents={mdComponents}
+      />
+      
+      {/* Render regular content */}
       <ReactMarkdown components={mdComponents}>
-        {typeof message.content === "string"
-          ? message.content
-          : JSON.stringify(message.content)}
+        {regularContent}
       </ReactMarkdown>
+      
       <Button
         variant="default"
         className={`cursor-pointer bg-neutral-700 border-neutral-600 text-neutral-300 self-end ${
@@ -208,9 +296,7 @@ const AiMessageBubble: React.FC<AiMessageBubbleProps> = ({
         }`}
         onClick={() =>
           handleCopy(
-            typeof message.content === "string"
-              ? message.content
-              : JSON.stringify(message.content),
+            messageContentString,
             message.id!
           )
         }

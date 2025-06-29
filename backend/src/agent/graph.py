@@ -1,13 +1,18 @@
 import os
+import logging
+from datetime import datetime
+import time
+from duckduckgo_search.exceptions import DuckDuckGoSearchException
+
+logger = logging.getLogger(__name__)
 
 from agent.tools_and_schemas import SearchQueryList, Reflection
-from dotenv import load_dotenv
 from langchain_core.messages import AIMessage
 from langgraph.types import Send
 from langgraph.graph import StateGraph
 from langgraph.graph import START, END
 from langchain_core.runnables import RunnableConfig
-from google.genai import Client
+from langchain_openai import ChatOpenAI
 
 from agent.state import (
     OverallState,
@@ -23,28 +28,18 @@ from agent.prompts import (
     reflection_instructions,
     answer_instructions,
 )
-from langchain_google_genai import ChatGoogleGenerativeAI
 from agent.utils import (
-    get_citations,
     get_research_topic,
-    insert_citation_markers,
-    resolve_urls,
 )
 
-load_dotenv()
-
-if os.getenv("GEMINI_API_KEY") is None:
-    raise ValueError("GEMINI_API_KEY is not set")
-
-# Used for Google Search API
-genai_client = Client(api_key=os.getenv("GEMINI_API_KEY"))
+from duckduckgo_search import DDGS
 
 
 # Nodes
 def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
     """LangGraph node that generates search queries based on the User's question.
 
-    Uses Gemini 2.0 Flash to create an optimized search queries for web research based on
+    Uses local OpenAI model to create an optimized search queries for web research based on
     the User's question.
 
     Args:
@@ -60,12 +55,13 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
     if state.get("initial_search_query_count") is None:
         state["initial_search_query_count"] = configurable.number_of_initial_queries
 
-    # init Gemini 2.0 Flash
-    llm = ChatGoogleGenerativeAI(
+    # init local OpenAI model
+    llm = ChatOpenAI(
         model=configurable.query_generator_model,
         temperature=1.0,
         max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
+        base_url="http://localhost:6000/v1",
+        api_key="not-needed",
     )
     structured_llm = llm.with_structured_output(SearchQueryList)
 
@@ -93,9 +89,9 @@ def continue_to_web_research(state: QueryGenerationState):
 
 
 def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
-    """LangGraph node that performs web research using the native Google Search API tool.
+    """LangGraph node that performs web research using the DuckDuckGo Search API tool.
 
-    Executes a web search using the native Google Search API tool in combination with Gemini 2.0 Flash.
+    Executes a web search using the DuckDuckGo Search API tool.
 
     Args:
         state: Current graph state containing the search query and research loop count
@@ -111,28 +107,56 @@ def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
         research_topic=state["search_query"],
     )
 
-    # Uses the google genai client as the langchain client doesn't return grounding metadata
-    response = genai_client.models.generate_content(
-        model=configurable.query_generator_model,
-        contents=formatted_prompt,
-        config={
-            "tools": [{"google_search": {}}],
-            "temperature": 0,
-        },
+    # Convert search results into a structured list (max 5 results)
+    search_results = []
+    try:
+        with DDGS() as ddgs:
+            for res in ddgs.text(state["search_query"], max_results=5):
+                search_results.append(res)
+    except DuckDuckGoSearchException as e:
+        logger.warning(f"DuckDuckGo search failed with {e}. Retrying with 'lite' backend.")
+        time.sleep(2)  # wait for 2 seconds before retrying
+        try:
+            with DDGS() as ddgs:
+                for res in ddgs.text(
+                    state["search_query"], max_results=5, backend="lite"
+                ):
+                    search_results.append(res)
+        except DuckDuckGoSearchException as e2:
+            logger.error(f"DuckDuckGo search failed again with {e2}. Giving up.")
+
+    if not search_results:
+        logger.warning("No web search results returned for query '%s'", state["search_query"])
+
+    # Build a simple textual summary of the search results
+    search_summary_lines = []
+    sources_gathered = []
+    for idx, res in enumerate(search_results, start=1):
+        line = f"{idx}. {res.get('title', '')}: {res.get('body', '')} (URL: {res.get('href', '')})"
+        search_summary_lines.append(line)
+        sources_gathered.append(res.get("href", ""))
+
+    search_summary = "\n".join(search_summary_lines)
+
+    # init local OpenAI model – use the same model throughout
+    llm = ChatOpenAI(
+        model=configurable.answer_model,
+        temperature=0,
+        base_url="http://localhost:6000/v1",
+        api_key="not-needed",
     )
-    # resolve the urls to short urls for saving tokens and time
-    resolved_urls = resolve_urls(
-        response.candidates[0].grounding_metadata.grounding_chunks, state["id"]
-    )
-    # Gets the citations and adds them to the generated text
-    citations = get_citations(response, resolved_urls)
-    modified_text = insert_citation_markers(response.text, citations)
-    sources_gathered = [item for citation in citations for item in citation["segments"]]
+
+    # Combine search result with the prompt
+    web_research_prompt = f"{formatted_prompt}\n\nHere are the search results:\n{search_summary}"
+    logger.info("[web_research] Prompt sent to LLM:\n%s", web_research_prompt)
+    result = llm.invoke(web_research_prompt)
+
+    logger.info("[web_research] LLM response: %s", result.content[:2000])
 
     return {
         "sources_gathered": sources_gathered,
         "search_query": [state["search_query"]],
-        "web_research_result": [modified_text],
+        "web_research_result": [result.content],
     }
 
 
@@ -162,12 +186,14 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
         research_topic=get_research_topic(state["messages"]),
         summaries="\n\n---\n\n".join(state["web_research_result"]),
     )
+    logger.info("[reflection] Prompt:\n%s", formatted_prompt)
     # init Reasoning Model
-    llm = ChatGoogleGenerativeAI(
+    llm = ChatOpenAI(
         model=reasoning_model,
         temperature=1.0,
         max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
+        base_url="http://localhost:6000/v1",
+        api_key="not-needed",
     )
     result = llm.with_structured_output(Reflection).invoke(formatted_prompt)
 
@@ -241,27 +267,34 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
         summaries="\n---\n\n".join(state["web_research_result"]),
     )
 
-    # init Reasoning Model, default to Gemini 2.5 Flash
-    llm = ChatGoogleGenerativeAI(
+    # init Reasoning Model, default to local OpenAI
+    llm = ChatOpenAI(
         model=reasoning_model,
         temperature=0,
         max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
+        base_url="http://localhost:6000/v1",
+        api_key="not-needed",
     )
     result = llm.invoke(formatted_prompt)
 
-    # Replace the short urls with the original urls and add all used urls to the sources_gathered
-    unique_sources = []
-    for source in state["sources_gathered"]:
-        if source["short_url"] in result.content:
-            result.content = result.content.replace(
-                source["short_url"], source["value"]
-            )
-            unique_sources.append(source)
+    # Persist conversation and sources to a log file for post-hoc analysis
+    try:
+        with open("conversation_logs.txt", "a", encoding="utf-8") as f:
+            f.write("\n==== Conversation %s ====\n" % datetime.utcnow().isoformat())
+            for msg in state["messages"]:
+                f.write(f"USER: {msg.content}\n")
+            f.write("--- Answer ---\n")
+            f.write(result.content + "\n")
+            if state.get("sources_gathered"):
+                f.write("--- Sources ---\n")
+                for s in state["sources_gathered"]:
+                    f.write(str(s) + "\n")
+    except Exception as e:
+        logger.error("Failed to write conversation log: %s", e)
 
     return {
         "messages": [AIMessage(content=result.content)],
-        "sources_gathered": unique_sources,
+        "sources_gathered": state.get("sources_gathered", []),
     }
 
 
