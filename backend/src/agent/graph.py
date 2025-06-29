@@ -36,7 +36,7 @@ from duckduckgo_search import DDGS
 
 
 # Nodes
-def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
+def generate_query(state: OverallState, config: RunnableConfig):
     """LangGraph node that generates search queries based on the User's question.
 
     Uses local OpenAI model to create an optimized search queries for web research based on
@@ -67,23 +67,31 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
 
     # Format the prompt
     current_date = get_current_date()
+    research_topic = get_research_topic(state["messages"])
     formatted_prompt = query_writer_instructions.format(
         current_date=current_date,
-        research_topic=get_research_topic(state["messages"]),
+        research_topic=research_topic,
         number_queries=state["initial_search_query_count"],
     )
     # Generate the search queries
     result = structured_llm.invoke(formatted_prompt)
-    return {"search_query": result.query}
+    return {"search_query": result.query, "research_topic": research_topic}
 
 
-def continue_to_web_research(state: QueryGenerationState):
+def continue_to_web_research(state: OverallState):
     """LangGraph node that sends the search queries to the web research node.
 
     This is used to spawn n number of web research nodes, one for each search query.
     """
     return [
-        Send("web_research", {"search_query": search_query, "id": int(idx)})
+        Send(
+            "web_research",
+            {
+                "search_query": search_query,
+                "research_topic": state["research_topic"],
+                "id": int(idx),
+            },
+        )
         for idx, search_query in enumerate(state["search_query"])
     ]
 
@@ -104,7 +112,7 @@ def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
     configurable = Configuration.from_runnable_config(config)
     formatted_prompt = web_searcher_instructions.format(
         current_date=get_current_date(),
-        research_topic=state["search_query"],
+        research_topic=state["research_topic"],
     )
 
     # Convert search results into a structured list (max 5 results)
@@ -183,7 +191,7 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
     current_date = get_current_date()
     formatted_prompt = reflection_instructions.format(
         current_date=current_date,
-        research_topic=get_research_topic(state["messages"]),
+        research_topic=state["research_topic"],
         summaries="\n\n---\n\n".join(state["web_research_result"]),
     )
     logger.info("[reflection] Prompt:\n%s", formatted_prompt)
@@ -203,6 +211,7 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
         "follow_up_queries": result.follow_up_queries,
         "research_loop_count": state["research_loop_count"],
         "number_of_ran_queries": len(state["search_query"]),
+        "research_topic": state["research_topic"],
     }
 
 
@@ -236,6 +245,7 @@ def evaluate_research(
                 "web_research",
                 {
                     "search_query": follow_up_query,
+                    "research_topic": state["research_topic"],
                     "id": state["number_of_ran_queries"] + int(idx),
                 },
             )
@@ -259,12 +269,12 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
     configurable = Configuration.from_runnable_config(config)
     reasoning_model = state.get("reasoning_model") or configurable.answer_model
 
-    # Format the prompt
+    # Format the final prompt
     current_date = get_current_date()
     formatted_prompt = answer_instructions.format(
         current_date=current_date,
-        research_topic=get_research_topic(state["messages"]),
-        summaries="\n---\n\n".join(state["web_research_result"]),
+        research_topic=state["research_topic"],
+        summaries="\n\n---\n\n".join(state["web_research_result"]),
     )
 
     # init Reasoning Model, default to local OpenAI

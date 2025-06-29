@@ -12,6 +12,7 @@ import operator
 
 class OverallState(TypedDict):
     messages: Annotated[list, add_messages]
+    research_topic: str
     search_query: Annotated[list, operator.add]
     web_research_result: Annotated[list, operator.add]
     sources_gathered: Annotated[list, operator.add]
@@ -27,6 +28,7 @@ class ReflectionState(TypedDict):
     follow_up_queries: Annotated[list, operator.add]
     research_loop_count: int
     number_of_ran_queries: int
+    research_topic: str
 
 
 class Query(TypedDict):
@@ -40,6 +42,7 @@ class QueryGenerationState(TypedDict):
 
 class WebSearchState(TypedDict):
     search_query: str
+    research_topic: str
     id: str
 
 

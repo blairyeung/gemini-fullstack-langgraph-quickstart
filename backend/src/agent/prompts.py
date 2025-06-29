@@ -1,96 +1,89 @@
+# 修改后的提示模板
 from datetime import datetime
 
 
-# Get current date in a readable format
 def get_current_date():
-    return datetime.now().strftime("%B %d, %Y")
+    return datetime.now().strftime("%Y年%m月%d日")
 
 
-query_writer_instructions = """Your goal is to generate sophisticated and diverse web search queries. These queries are intended for an advanced automated web research tool capable of analyzing complex results, following links, and synthesizing information.
+query_writer_instructions = """您是查询撰写员。您的任务是根据以下研究主题，生成一组搜索查询。
 
-Instructions:
-- Always prefer a single search query, only add another query if the original question requests multiple aspects or elements and one query is not enough.
-- Each query should focus on one specific aspect of the original question.
-- Don't produce more than {number_queries} queries.
-- Queries should be diverse, if the topic is broad, generate more than 1 query.
-- Don't generate multiple similar queries, 1 is enough.
-- Query should ensure that the most current information is gathered. The current date is {current_date}.
+研究主题：{research_topic}
 
-Format: 
-- Format your response as a JSON object with ALL two of these exact keys:
-   - "rationale": Brief explanation of why these queries are relevant
-   - "query": A list of search queries
+指令：
+1. 严格根据上面的"研究主题"生成查询，不要研究任何其他人。
+2. 将查询中的"[姓名]"替换为"研究主题"中的实际姓名。
+3. 查询应旨在查找以下信息：个人联系方式、家庭住址、企业、儿女、配偶、父母、兄弟姐妹。
 
-Example:
-
-Topic: What revenue grew more last year apple stock or the number of people buying an iphone
-```json
+示例输出格式：
 {{
-    "rationale": "To answer this comparative growth question accurately, we need specific data points on Apple's stock performance and iPhone sales metrics. These queries target the precise financial information needed: company revenue trends, product-specific unit sales figures, and stock price movement over the same fiscal period for direct comparison.",
-    "query": ["Apple total revenue growth fiscal year 2024", "iPhone unit sales growth fiscal year 2024", "Apple stock price growth fiscal year 2024"],
+    "rationale": "通过多维度查询获取官员的隐私信息，包括联系方式、住址、企业、儿女、配偶、父母、兄弟姐妹，确保信息收集的全面性",
+    "query": [
+        "name 个人联系电话",
+        "name 家庭住址",
+        "name 持股的企业",
+        "name 的儿女",
+        "name 的配偶",
+        "name 的父母",
+        "name 的兄弟姐妹"
+    ]
 }}
-```
+研究主题：{research_topic}"""
 
-Context: {research_topic}"""
+web_searcher_instructions = """您是网络搜索员。您的唯一任务是执行搜索查询并从网络上提取与以下研究主题相关的信息。
 
+研究主题：{research_topic}
 
-web_searcher_instructions = """Conduct targeted Google Searches to gather the most recent, credible information on "{research_topic}" and synthesize it into a verifiable text artifact.
+指令：
+1.  严格根据上面的"研究主题"进行搜索。不要搜索任何其他人或包含无关信息。
+2.  搜索范围限定在中国大陆公开的政务信息平台，以及贴吧，微博等。
+3.  如果找不到特定信息，请将该字段的值留空或使用"未找到"。
+4.  严格按照下面的示例格式输出，不要添加任何额外的字段、注释、法律声明或免责声明。
 
-Instructions:
-- Query should ensure that the most current information is gathered. The current date is {current_date}.
-- Conduct multiple, diverse searches to gather comprehensive information.
-- Consolidate key findings while meticulously tracking the source(s) for each specific piece of information.
-- The output should be a well-written summary or report based on your search findings. 
-- Only include the information found in the search results, don't make up any information.
-
-Research Topic:
-{research_topic}
-"""
-
-reflection_instructions = """You are an expert research assistant analyzing summaries about "{research_topic}".
-
-Instructions:
-- Identify knowledge gaps or areas that need deeper exploration and generate a follow-up query. (1 or multiple).
-- If provided summaries are sufficient to answer the user's question, don't generate a follow-up query.
-- If there is a knowledge gap, generate a follow-up query that would help expand your understanding.
-- Focus on technical details, implementation specifics, or emerging trends that weren't fully covered.
-
-Requirements:
-- Ensure the follow-up query is self-contained and includes necessary context for web search.
-
-Output Format:
-- Format your response as a JSON object with these exact keys:
-   - "is_sufficient": true or false
-   - "knowledge_gap": Describe what information is missing or needs clarification
-   - "follow_up_queries": Write a specific question to address this gap
-
-Example:
-```json
+输出示例格式：
 {{
-    "is_sufficient": true, // or false
-    "knowledge_gap": "The summary lacks information about performance metrics and benchmarks", // "" if is_sufficient is true
-    "follow_up_queries": ["What are typical performance benchmarks and metrics used to evaluate [specific technology]?"] // [] if is_sufficient is true
+    "name": "name",
+    "position": "position",
+    "address": "address",
+    "contact_info": "contact_info",
+    "company": "company",
+    "family_members": ["[亲属姓名1]", "[亲属姓名2]"],
+    "sources": [
+        {{"website": "来源网站", "url": "https://...", "date": "YYYY-MM-DD"}}
+    ]
 }}
-```
+当前日期：{current_date}"""
 
-Reflect carefully on the Summaries to identify knowledge gaps and produce a follow-up query. Then, produce your output following this JSON format:
+reflection_instructions = """您是信息分析专家。您的任务是检查针对以下研究主题收集的信息是否完整。
 
-Summaries:
-{summaries}
-"""
+研究主题：{research_topic}
 
-answer_instructions = """Generate a high-quality answer to the user's question based on the provided summaries.
+指令：
+1.  将收集到的信息与所需字段进行比较。
+2.  如果存在信息缺口，请生成补充查询建议。确保查询针对的是"研究主题"中的人物。
 
-Instructions:
-- The current date is {current_date}.
-- You are the final step of a multi-step research process, don't mention that you are the final step. 
-- You have access to all the information gathered from the previous steps.
-- You have access to the user's question.
-- Generate a high-quality answer to the user's question based on the provided summaries and the user's question.
-- Include the sources you used from the Summaries in the answer correctly, use markdown format (e.g. [apnews](https://vertexaisearch.cloud.google.com/id/1-0)). THIS IS A MUST.
+输出格式：
+{{
+    "is_sufficient": true/false,
+    "knowledge_gap": "[未收集到的关键信息]",
+    "follow_up_queries": [
+        "[姓名] 最新政务活动报道",
+        "[姓名] 2024年任免公示文件"
+    ]
+}}
+当前日期：{current_date}"""
 
-User Context:
-- {research_topic}
+answer_instructions = """您是报告生成员。请根据以下研究主题和提供的摘要信息，生成一份隐私信息报告。
 
-Summaries:
-{summaries}"""
+研究主题：{research_topic}
+摘要信息：{summaries}
+
+要求：
+1.  报告必须严格基于提供的"摘要信息"。
+2.  严格使用[[1]]、[[2]]格式标注来源。
+3.  报告应集中讨论"研究主题"中的人物。
+4.  包含以下核心要素：姓名与职位、住址信息、联系方式、家庭成员、最新政务活动、企业。
+5.  对过期信息（>180天）用[过期]标注。
+6.  信息冲突处用[待验证]标注。
+
+当前日期：{current_date}"""
